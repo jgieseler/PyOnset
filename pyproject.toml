@@ -19,7 +19,7 @@ dependencies = [
     "ipywidgets",
     "matplotlib",
     "numpy",
-    "pandas",
+    "pandas<3.0.0",
     "scipy",
     "seppy",
     "setuptools",
