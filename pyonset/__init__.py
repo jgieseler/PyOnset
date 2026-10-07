@@ -8,7 +8,7 @@ A library that holds the Onset class for PyOnset.
 
 @Author: Christian Palmroos <chospa@utu.fi>
 
-@Updated: 2026-01-07
+@Updated: 2026-09-17
 
 Known problems/bugs:
     > Does not work with SolO/STEP due to electron and proton channels not defined in all_channels() -method
@@ -58,7 +58,7 @@ from .onsetstatsarray import OnsetStatsArray
 
 from .datetime_utilities import datetime_to_sec, datetime_nanmedian, detrend_onsets, \
                                 get_time_reso, calculate_cusum_window, find_biggest_nonzero_unit, \
-                                get_figdate, check_confidence_intervals
+                                get_figdate, check_confidence_intervals, validate_index_dtype
 
 from .calc_utilities import z_score, sigma_norm, k_parameter, k_legacy, k_classic
 from .plot_utilities import set_fig_ylimits, set_standard_ticks, set_legend, max_averaging_reso_textbox, save_figure, \
@@ -69,19 +69,19 @@ __author__ = "Christian Palmroos"
 __email__ = "chospa@utu.fi"
 
 # Some useful global constants
-CURRENT_PATH = os.getcwd()
-C_SQUARED = const.c.value*const.c.value
+CURRENT_PATH: str = os.getcwd()
+C_SQUARED: float = const.c.value*const.c.value
 
 ELECTRON_IDENTIFIERS = ("electrons", "electron", 'e')
 PROTON_IDENTIFIERS = ("protons", "proton", "ions", "ion", 'p', 'i', 'H')
 
 SEPPY_SPACECRAFT = ("sta", "stb", "solo", "psp", "wind", "soho", "bepi")
-SEPPY_SENSORS = {"sta" : ("sept", "het"),
+SEPPY_SENSORS: dict[str, tuple[str]] = {"sta" : ("sept", "het"),
                  "stb" : ("sept", "het"),
                  "solo" : ("ept", "het"),
                  "psp" : ("isois_epilo", "isois_epihi"),
                  "wind" : ("3dp"),
-                 "soho" : ("erne-hed", "ephin"),
+                 "soho" : ("erne-hed", "ephin", "ephin_l3"),
                  "bepi" : ("sixs-p")
                  }
 
@@ -101,15 +101,17 @@ NEWLINE = "\n"
 class Onset(Event):
 
     def __init__(self, start_date, end_date, spacecraft, sensor, species, data_level, data_path, viewing=None, radio_spacecraft=None, threshold=None,
-                 data=None, unit=None):
+                 data=None, unit=None, offline:bool=False):
 
         # By default we download data, not provide it
         if data is None:
-            super().__init__(start_date, end_date, spacecraft, sensor,
-                    species, data_level, data_path, viewing, radio_spacecraft,
-                    threshold)
-            self.custom_data = False
-            self.unit = r"Intensity [1/(cm$^{2}$ sr s MeV)]" if unit is None else unit
+            super().__init__(start_date=start_date, end_date=end_date, spacecraft=spacecraft, 
+                             sensor=sensor, species=species, data_level=data_level, 
+                             data_path=data_path, viewing=viewing, radio_spacecraft=radio_spacecraft,
+                             threshold=threshold, offline=offline)
+
+            self.custom_data: bool = False
+            self.unit: str = r"Intensity [1/(cm$^{2}$ sr s MeV)]" if unit is None else unit
 
             # Check here that the spacecraft and instrument are SEPpy-compatible.
             # to provide the custom data.
@@ -153,13 +155,13 @@ class Onset(Event):
             self.data = data.copy(deep=True)
             self.current_df_e = self.data
             self.current_df_i = self.current_df_e
-            self.unit = r"Intensity [1/(cm$^{2}$ sr s MeV)]" if unit is None else unit
+            self.unit: str = r"Intensity [1/(cm$^{2}$ sr s MeV)]" if unit is None else unit
 
             # Custom data flag prevents SEPpy functions from being called, as they would cause errors
-            self.custom_data = True
+            self.custom_data: bool = True
 
             # The channel energy dictionary maps channel names to channel energies
-            self.channel_en_dict = None
+            self.channel_en_dict: dict = None
 
             # Lets the user know that the object is initialized with custom settings
             print("Utilizing user-input data. Some SEPpy functionality may not work as intended.")
@@ -224,6 +226,7 @@ class Onset(Event):
             "solo_het_p" : np.arange(36, dtype=int),
 
             "soho_ephin_e" : (150, 300, 1300, 3000),
+            "soho_ephin_l3_e" : np.arange(15, dtype=int),
             "soho_erne_p" : np.arange(10, dtype=int),
 
             "wind_3dp_e" : np.arange(7, dtype=int),
@@ -289,7 +292,7 @@ class Onset(Event):
         if returns:
             return self.viewing
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return str(f"({self.spacecraft},{self.sensor},{self.species})")
 
     def get_all_channels(self):
@@ -560,7 +563,7 @@ class Onset(Event):
         if viewing and not self.check_viewing(returns=True):
             raise ValueError("Invalid viewing direction!")
 
-        color_dict = {
+        color_dict: dict[str, str] = {
             'onset_time': '#e41a1c',
             'bg_mean': '#e41a1c',
             'flux_peak': '#1a1682',
@@ -603,6 +606,9 @@ class Onset(Event):
                 en_channel_string = channels
 
             self.last_used_channel = channels
+
+        # Validate the series index dtype (has to be ns accuracy)
+        flux_series = validate_index_dtype(flux_series=flux_series)
 
         # Save the native resolution to a class attribute.
         self.native_resolution = get_time_reso(series=flux_series)
@@ -1953,8 +1959,8 @@ class Onset(Event):
                                                  sensor='HET')
 
                 if self.sensor == 'ephin':
-                    # convert single-element "channels" list to integer
-                    if type(channels) == list:
+                    # Convert single-element "channels" list to integer
+                    if isinstance(channels, list):
                         if len(channels) == 1:
                             channels = channels[0]
                         else:
@@ -1963,6 +1969,18 @@ class Onset(Event):
                         energy_labels_key = "energy_labels"
                         df_flux = self.current_df_e[f'E{channels}']
                         en_channel_string = self.current_energies[energy_labels_key][f"E{channels}"]
+
+                if self.sensor == "ephin_l3":
+                    # Convert single-element "channels" list to integer
+                    if isinstance(channels, list):
+                        if len(channels) == 1:
+                            channels = channels[0]
+                        else:
+                            raise NotImplementedError("No multi-channel support for SOHO/EPHIN L3 included yet! Select only one single channel.")
+
+                    energy_labels_key = "Electron_ENERGY_LABL"
+                    df_flux = self.current_df_e[f"E{channels}"]
+                    en_channel_string = self.current_energies[energy_labels_key][channels]
 
             except KeyError:
                 raise Exception(f"{channels} is an invalid channel or a combination of channels!")
@@ -2715,7 +2733,7 @@ class Onset(Event):
             if not isinstance(yerrs, (list, np.ndarray)):
 
                 plus_errs, minus_errs = np.array([]), np.array([])
-                # Loop through all possible, channels, even those that not necessarily show an onset
+                # Loop through all possible channels, even those that not necessarily show an onset
                 for ch in channels:
 
                     try: 
@@ -3306,14 +3324,16 @@ class Onset(Event):
 
                 if stop_int > 0:
                     if prints:
-                        print(f"Averaging up to {stop_int} minutes")
+                        print(f"Averaging from {self.native_resolution} up to {stop_int} minutes")
 
                 # SolO instruments and Wind/3DP have high cadence (< 1 min), so start integrating from 1 minute measurements
                     # unless limit_computation_time is enabled
                 if self.spacecraft in FINE_CADENCE_SC and not limit_computation_time:
                     int_times = np.array([i for i in range(1,stop_int+1)])
                 else:
-                    int_times = np.array([i for i in range(2,stop_int+1)])
+                    start_int = pd.Timedelta(self.native_resolution).seconds//60 + 1
+                    int_times = np.array([i for i in range(start_int,stop_int+1)])
+                    upto_averaging_display = stop_int
 
         # Go here if no onset found at all
         else:
@@ -3321,50 +3341,54 @@ class Onset(Event):
             if self.spacecraft in FINE_CADENCE_SC and not limit_computation_time:
                 try_avg_start = 1
             else:
-                try_avg_start = 2
-            try_avg_stop = 5 if not isinstance(fail_avg_stop,int) else fail_avg_stop
+                try_avg_start: int = pd.Timedelta(self.native_resolution).seconds//60 + 1
+            try_avg_stop: int = try_avg_start+3 if not isinstance(fail_avg_stop,int) else fail_avg_stop
 
-            # Try up to {try_avg_stop} minutes averaging (default 5), if still no onset -> give up
-            for i in range(try_avg_start,try_avg_stop+1):
+            try_avgs: list[str] = [f"{i} min" for i in range(try_avg_start,try_avg_stop+1)]
+
+            # Try up to {try_avg_stop} minutes averaging (default=5 with 1-minute data), if still no onset -> give up
+            for try_averaging in try_avgs:
+
+                try_avg_minutes: int = pd.Timedelta(try_averaging).seconds//60
 
                 next_run_stats, _ = self.statistic_onset(channels=channels, Window=background, viewing=viewing, 
-                                            sample_size=sample_size, resample=f"{i}min", erase=erase, small_windows=small_windows,
+                                            sample_size=sample_size, resample=try_averaging, erase=erase, small_windows=small_windows,
                                             cusum_minutes=cusum_minutes, sigma_multiplier=sigma_multiplier, detrend=True, k_model=k_model)
-                next_run_uncertainty = next_run_stats["1-sigma_confidence_interval"][1] - next_run_stats["1-sigma_confidence_interval"][0]
+                next_run_uncertainty: pd.Timedelta = next_run_stats["1-sigma_confidence_interval"][1] - next_run_stats["1-sigma_confidence_interval"][0]
 
                 try:
                     next_run_uncertainty_mins = int(np.round((next_run_stats["1-sigma_confidence_interval"][1] - next_run_stats["1-sigma_confidence_interval"][0]).seconds / 60))
                 except ValueError as e:
                     print(e)
                     print("This is caused by failing to identify the onset despite additional time-averaging.")
-                    if i < try_avg_stop:
+                    if pd.Timedelta(try_averaging) < pd.Timedelta(try_avgs[-1]):
                         continue
 
                 if not isinstance(next_run_uncertainty, pd._libs.tslibs.nattype.NaTType):
                     if prints:
-                        print(f"No onset found in the native data resolution. ~68 % uncertainty with {i} min resolution: {next_run_uncertainty}")
+                        print(f"No onset found in the native data resolution. ~68 % uncertainty with {try_averaging} resolution: {next_run_uncertainty}")
 
                     # Here check if it makes sense to average "from i minutes to <uncertainty> minutes or up to "stop" minutes
                     if stop:
 
-                        if i < stop_int:
-                            int_times = np.array([j for j in range(i,stop_int+1)])
+                        if pd.Timedelta(try_averaging) < pd.Timedelta(try_avgs[-1]):
+                            int_times = np.array([j for j in range(try_avg_minutes,stop_int+1)])
                             if prints:
-                                print(f"Averaging from {i} minutes up to {stop_int} minutes")
+                                print(f"Averaging from {try_averaging} up to {try_avgs[-1]}")
                         else:
                             if prints:
-                                print(f"Stop condition set to {stop_int} minutes, which is less than {i} min. Using only {i} minutes averaged data.")
-                            int_times = np.array([j for j in range(i,i+1)])
+                                print(f"Stop condition set to {stop_int} minutes, which is less than {try_averaging}. Using only {try_averaging} averaged data.")
+                            int_times = np.array([j for j in range(try_avg_minutes,try_avg_minutes+1)])
 
-                    elif i < next_run_uncertainty_mins:
-                        int_times = np.array([j for j in range(i,next_run_uncertainty_mins+1)])
+                    elif pd.Timedelta(try_averaging) < next_run_uncertainty:
+                        int_times = np.array([j for j in range(try_avg_minutes,next_run_uncertainty_mins+1)])
                         if prints:
                             if limit_averaging:
                                 upto_averaging_display = limit_averaging_int if limit_averaging_int < next_run_uncertainty_mins else next_run_uncertainty_mins
                             else:
                                 upto_averaging_display = next_run_uncertainty_mins
 
-                            print(f"Averaging from {i} minutes up to {upto_averaging_display} minutes")
+                            print(f"Averaging from {try_averaging} up to {upto_averaging_display} minutes")
 
                     # No onset was found with any time averaging
                     else:
@@ -3380,9 +3404,9 @@ class Onset(Event):
 
                 else:
                     # If we tried everything and still no onset -> NaT and exit
-                    if i==try_avg_stop:
+                    if try_averaging==try_avgs[-1]:
                         if prints:
-                            print(f"No onsets found with 1 min ... {i} min time averaging. Terminating.")
+                            print(f"No onsets found with {try_avgs[0]} ... {try_averaging} time averaging. Terminating.")
                         self.max_avg_times[channels] = pd.NaT
                         stats_arr.calculate_weighted_uncertainty("int_time")
                         return stats_arr
@@ -3400,7 +3424,7 @@ class Onset(Event):
             int_times = int_times[np.where(int_times <= limit_averaging_int)]
 
         # Finally convert int_times (integers) to pandas-compatible time strs
-        int_time_strs = produce_integration_times(int_time_ints=int_times, limit_averaging=limit_averaging, stop=stop)           
+        int_time_strs: list[str] = produce_integration_times(int_time_ints=int_times, limit_averaging=limit_averaging, stop=stop)           
 
         # Loop through int_times as far as the first run uncertainty reaches
         for resample in int_time_strs:
@@ -4471,13 +4495,13 @@ def onset_determination(ma_sigma, flux_series, cusum_window, avg_end, sigma_mult
         # During gaps alert signals are not modified, i.e., not incremented nor set to zero. Also the
         # cusum function stays constant.
         # In addition, the current nan streak IS incremented.
-        if np.isnan(norm_channel[i]):
+        if np.isnan(norm_channel.iloc[i]):
             cusum[i] = cusum[i-1]
             current_nan_streak += 1
             continue
 
         # Calculate the value for the next cusum entry
-        cusum[i] = max(0, norm_channel[i] - k_round + cusum[i-1])
+        cusum[i] = max(0, norm_channel.iloc[i] - k_round + cusum[i-1])
 
         # Check if cusum[i] is above threshold h, if it is -> increment alert
         if cusum[i]>h:
